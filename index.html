@@ -9,28 +9,71 @@
 </head>
 <body>
 
-  <div class="container">
-    <img src="logo.png" class="logo" alt="FaceProject Logo">
+  <div class="app-shell">
+    <div class="container">
+      <img src="logo.png" class="logo" alt="FaceProject Logo">
 
-    <h1>FaceProject™</h1>
+      <h1>FaceProject™</h1>
 
-    <input type="text" id="nameInput" placeholder="Dein Name">
-    <input type="text" id="roomInput" placeholder="Raumcode eingeben">
+      <div class="control-panel">
+        <input type="text" id="nameInput" placeholder="Dein Name">
+        <input type="text" id="roomInput" placeholder="Raumcode eingeben">
 
-    <button onclick="createRoom()">Raum erstellen</button>
-    <button onclick="joinRoom()">Raum beitreten</button>
-    <button id="workNowBtn" onclick="workNow()">Ich arbeite jetzt</button>
-    <button id="pauseWorkBtn" onclick="pauseWork()">Arbeit pausieren</button>
-    <button id="resumeWorkBtn" onclick="resumeWork()">Arbeit fortsetzen</button>
-    <button id="stopWorkBtn" onclick="stopWork()">Arbeit beenden</button>
-    <button id="leaveRoomBtn" onclick="leaveRoom()">Raum verlassen</button>
+        <button onclick="createRoom()">Raum erstellen</button>
+        <button onclick="joinRoom()">Raum beitreten</button>
+        <button id="workNowBtn" onclick="workNow()">Ich arbeite jetzt</button>
+        <button id="pauseWorkBtn" onclick="pauseWork()">Arbeit pausieren</button>
+        <button id="resumeWorkBtn" onclick="resumeWork()">Arbeit fortsetzen</button>
+        <button id="stopWorkBtn" onclick="stopWork()">Arbeit beenden</button>
+        <button id="leaveRoomBtn" onclick="leaveRoom()">Raum verlassen</button>
+      </div>
 
-    <p id="status"></p>
+      <p id="status"></p>
 
-    <div id="ownerBox"></div>
-    <div id="participantsBox"></div>
-    <div id="workerBox"></div>
-    <div id="lockBox"></div>
+      <div class="status-grid">
+        <div class="status-card" id="ownerBox"></div>
+        <div class="status-card" id="workerBox"></div>
+        <div class="status-card status-lock" id="lockBox"></div>
+      </div>
+
+      <div class="participants-card" id="participantsBox"></div>
+    </div>
+
+    <div class="workspace">
+      <div class="workspace-header">
+        <h2>Arbeitsfläche</h2>
+        <p>Hier entsteht der gemeinsame Raum für Inhalte, Dateien und Freigaben.</p>
+      </div>
+
+      <div class="workspace-grid">
+        <div class="workspace-card">
+          <div class="workspace-card-header">
+            <h3>Dateien</h3>
+          </div>
+          <div class="workspace-card-body" id="filesArea">
+            <p>Noch keine Dateien im Raum</p>
+          </div>
+        </div>
+
+        <div class="workspace-card">
+          <div class="workspace-card-header">
+            <h3>Bilder</h3>
+          </div>
+          <div class="workspace-card-body" id="imagesArea">
+            <p>Noch keine Bilder im Raum</p>
+          </div>
+        </div>
+
+        <div class="workspace-card workspace-card-wide">
+          <div class="workspace-card-header">
+            <h3>Bildschirmfreigabe</h3>
+          </div>
+          <div class="workspace-card-body screen-area" id="screenArea">
+            <p>Noch keine Bildschirmfreigabe aktiv</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
