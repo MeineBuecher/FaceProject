@@ -5,6 +5,7 @@ const client = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let currentRoom = null;
 let currentParticipantName = null;
+let currentParticipantStatus = null;
 let currentChannel = null;
 let currentWorkerChannel = null;
 
@@ -49,7 +50,7 @@ function getLeaveRoomButton() {
   return document.getElementById("leaveRoomBtn");
 }
 
-function updateWorkButtons(activeWorkerName, workStatus = null) {
+function updateWorkButtons(activeWorkerName) {
   const workBtn = getWorkNowButton();
   const pauseBtn = getPauseWorkButton();
   const resumeBtn = getResumeWorkButton();
@@ -70,23 +71,23 @@ function updateWorkButtons(activeWorkerName, workStatus = null) {
     return;
   }
 
+  if (currentParticipantStatus === "pausiert") {
+    workBtn.disabled = true;
+    pauseBtn.disabled = true;
+    resumeBtn.disabled = false;
+    stopBtn.disabled = true;
+    return;
+  }
+
   if (!activeWorkerName) {
     workBtn.disabled = false;
-    pauseBtn.disabled = true;
+    pauseBtn.disabled = false;
     resumeBtn.disabled = true;
     stopBtn.disabled = true;
     return;
   }
 
   if (activeWorkerName === currentParticipantName) {
-    if (workStatus === "pausiert") {
-      workBtn.disabled = true;
-      pauseBtn.disabled = true;
-      resumeBtn.disabled = false;
-      stopBtn.disabled = false;
-      return;
-    }
-
     workBtn.disabled = true;
     pauseBtn.disabled = false;
     resumeBtn.disabled = true;
@@ -95,7 +96,7 @@ function updateWorkButtons(activeWorkerName, workStatus = null) {
   }
 
   workBtn.disabled = true;
-  pauseBtn.disabled = true;
+  pauseBtn.disabled = false;
   resumeBtn.disabled = true;
   stopBtn.disabled = true;
 }
@@ -212,6 +213,8 @@ async function upsertParticipantStatus(statusValue) {
       throw insertError;
     }
   }
+
+  currentParticipantStatus = statusValue;
 }
 
 async function createRoom() {
@@ -339,6 +342,7 @@ async function leaveRoom() {
 
     currentRoom = null;
     currentParticipantName = null;
+    currentParticipantStatus = null;
     clearSavedRoom();
 
     const ownerBox = getOwnerBox();
@@ -422,6 +426,10 @@ function renderParticipants(list) {
   });
 
   latestByName.forEach((p) => {
+    if (p.name === currentParticipantName) {
+      currentParticipantStatus = p.status || "online";
+    }
+
     const statusText = p.status ? ` – ${p.status}` : "";
     html += `<div>${p.name}${statusText}</div>`;
   });
@@ -447,8 +455,9 @@ function subscribeRealtime() {
           table: "participants",
           filter: "room_code=eq." + currentRoom
         },
-        () => {
-          loadParticipants();
+        async () => {
+          await loadParticipants();
+          await loadWorker();
         }
       )
       .subscribe();
@@ -461,6 +470,12 @@ async function workNow() {
   try {
     if (!currentRoom || !currentParticipantName) {
       setStatus("Bitte erst Raum und Namen festlegen");
+      return;
+    }
+
+    if (currentParticipantStatus === "pausiert") {
+      setStatus("Du hast den Raum pausiert. Bitte zuerst Raum fortsetzen.");
+      await loadWorker();
       return;
     }
 
@@ -477,16 +492,9 @@ async function workNow() {
 
     if (active && active.length > 0) {
       const currentWorker = active[0].worker_name;
-      const currentWorkStatus = active[0].work_status || "aktiv";
 
       if (currentWorker !== currentParticipantName) {
         setStatus(currentWorker + " arbeitet gerade. Du kannst erst übernehmen, wenn die Arbeit beendet wurde.");
-        await loadWorker();
-        return;
-      }
-
-      if (currentWorkStatus === "pausiert") {
-        setStatus("Deine Arbeit ist pausiert. Nutze bitte Arbeit fortsetzen.");
         await loadWorker();
         return;
       }
@@ -499,8 +507,7 @@ async function workNow() {
     const { error } = await client.from("active_worker").insert([
       {
         room_code: currentRoom,
-        worker_name: currentParticipantName,
-        work_status: "aktiv"
+        worker_name: currentParticipantName
       }
     ]);
 
@@ -523,48 +530,33 @@ async function pauseWork() {
       return;
     }
 
-    const { data, error } = await client
+    if (currentParticipantStatus === "pausiert") {
+      setStatus("Du hast den Raum bereits pausiert");
+      await loadParticipants();
+      await loadWorker();
+      return;
+    }
+
+    await upsertParticipantStatus("pausiert");
+
+    const { data: active, error: activeError } = await client
       .from("active_worker")
       .select("*")
       .eq("room_code", currentRoom)
       .order("created_at", { ascending: false });
 
-    if (error) {
-      setStatus("Fehler beim Prüfen: " + error.message);
-      return;
+    if (!activeError && active && active.length > 0) {
+      const activeWorker = active[0];
+      if (activeWorker.worker_name === currentParticipantName) {
+        await client
+          .from("active_worker")
+          .delete()
+          .eq("room_code", currentRoom);
+      }
     }
 
-    if (!data || data.length === 0) {
-      setStatus("Gerade arbeitet niemand");
-      await loadWorker();
-      return;
-    }
-
-    const activeRow = data[0];
-
-    if (activeRow.worker_name !== currentParticipantName) {
-      setStatus("Nur " + activeRow.worker_name + " kann die Arbeit pausieren");
-      await loadWorker();
-      return;
-    }
-
-    if ((activeRow.work_status || "aktiv") === "pausiert") {
-      setStatus("Deine Arbeit ist bereits pausiert");
-      await loadWorker();
-      return;
-    }
-
-    const { error: updateError } = await client
-      .from("active_worker")
-      .update({ work_status: "pausiert" })
-      .eq("id", activeRow.id);
-
-    if (updateError) {
-      setStatus("Fehler beim Pausieren: " + updateError.message);
-      return;
-    }
-
-    setStatus(currentParticipantName + " hat die Arbeit pausiert");
+    setStatus(currentParticipantName + " hat den Raum pausiert");
+    await loadParticipants();
     await loadWorker();
   } catch (err) {
     setStatus("JS-Fehler pauseWork: " + err.message);
@@ -578,48 +570,17 @@ async function resumeWork() {
       return;
     }
 
-    const { data, error } = await client
-      .from("active_worker")
-      .select("*")
-      .eq("room_code", currentRoom)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      setStatus("Fehler beim Prüfen: " + error.message);
-      return;
-    }
-
-    if (!data || data.length === 0) {
-      setStatus("Es gibt keine pausierte Arbeit");
+    if (currentParticipantStatus !== "pausiert") {
+      setStatus("Dein Raum ist nicht pausiert");
+      await loadParticipants();
       await loadWorker();
       return;
     }
 
-    const activeRow = data[0];
+    await upsertParticipantStatus("online");
 
-    if (activeRow.worker_name !== currentParticipantName) {
-      setStatus("Nur " + activeRow.worker_name + " kann die Arbeit fortsetzen");
-      await loadWorker();
-      return;
-    }
-
-    if ((activeRow.work_status || "aktiv") !== "pausiert") {
-      setStatus("Deine Arbeit ist nicht pausiert");
-      await loadWorker();
-      return;
-    }
-
-    const { error: updateError } = await client
-      .from("active_worker")
-      .update({ work_status: "aktiv" })
-      .eq("id", activeRow.id);
-
-    if (updateError) {
-      setStatus("Fehler beim Fortsetzen: " + updateError.message);
-      return;
-    }
-
-    setStatus(currentParticipantName + " hat die Arbeit fortgesetzt");
+    setStatus(currentParticipantName + " ist wieder aktiv im Raum");
+    await loadParticipants();
     await loadWorker();
   } catch (err) {
     setStatus("JS-Fehler resumeWork: " + err.message);
@@ -688,25 +649,23 @@ async function loadWorker() {
 
     if (error) {
       box.innerHTML = "<h3>Aktiv:</h3><p>Arbeitsstatus konnte nicht geladen werden</p>";
-      updateWorkButtons(null, null);
+      updateWorkButtons(null);
       return;
     }
 
     if (!data || data.length === 0) {
       box.innerHTML = "<h3>Aktiv:</h3><p>Gerade arbeitet niemand</p>";
-      updateWorkButtons(null, null);
+      updateWorkButtons(null);
       return;
     }
 
     const activeWorkerName = data[0].worker_name;
-    const workStatus = data[0].work_status || "aktiv";
-    const statusSuffix = workStatus === "pausiert" ? " (pausiert)" : "";
 
-    box.innerHTML = `<h3>Aktiv:</h3><p>${activeWorkerName}${statusSuffix}</p>`;
-    updateWorkButtons(activeWorkerName, workStatus);
+    box.innerHTML = `<h3>Aktiv:</h3><p>${activeWorkerName}</p>`;
+    updateWorkButtons(activeWorkerName);
   } catch (err) {
     setStatus("JS-Fehler loadWorker: " + err.message);
-    updateWorkButtons(null, null);
+    updateWorkButtons(null);
   }
 }
 
@@ -752,7 +711,7 @@ async function restorePreviousSession() {
     const savedName = localStorage.getItem(SAVED_NAME_KEY);
 
     if (!savedRoom || !savedName) {
-      updateWorkButtons(null, null);
+      updateWorkButtons(null);
       return;
     }
 
@@ -781,7 +740,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     nameInput.addEventListener("input", saveName);
   }
 
-  updateWorkButtons(null, null);
+  updateWorkButtons(null);
 
   await restorePreviousSession();
 });
