@@ -159,3 +159,8 @@ button:hover {
     font-size: 1.1rem;
   }
 }
+button:disabled {
+  background: #d9a06f;
+  cursor: not-allowed;
+  opacity: 0.75;
+}
