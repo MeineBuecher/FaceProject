@@ -7,6 +7,7 @@ let currentRoom = null;
 let currentParticipantName = null;
 let currentChannel = null;
 let currentWorkerChannel = null;
+const SAVED_NAME_KEY = "faceproject_name";
 
 function setStatus(text) {
   const el = document.getElementById("status");
@@ -26,9 +27,39 @@ function getOwnerBox() {
   return document.getElementById("ownerBox");
 }
 
+function loadSavedName() {
+  const saved = localStorage.getItem(SAVED_NAME_KEY);
+  const input = document.getElementById("nameInput");
+
+  if (saved && input) {
+    input.value = saved;
+  }
+}
+
+function saveName() {
+  const input = document.getElementById("nameInput");
+  if (!input) return;
+
+  const name = input.value.trim();
+
+  if (name) {
+    localStorage.setItem(SAVED_NAME_KEY, name);
+  }
+}
+
+function clearSavedName() {
+  localStorage.removeItem(SAVED_NAME_KEY);
+}
+
 function getEnteredName() {
   const input = document.getElementById("nameInput");
-  return input ? input.value.trim() : "";
+  const name = input ? input.value.trim() : "";
+
+  if (name) {
+    localStorage.setItem(SAVED_NAME_KEY, name);
+  }
+
+  return name;
 }
 
 async function createRoom() {
@@ -377,3 +408,19 @@ function subscribeWorkerRealtime() {
     setStatus("JS-Fehler worker realtime: " + err.message);
   }
 }
+
+function clearNameOnly() {
+  clearSavedName();
+  const input = document.getElementById("nameInput");
+  if (input) input.value = "";
+  setStatus("Gespeicherter Name wurde gelöscht");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadSavedName();
+
+  const nameInput = document.getElementById("nameInput");
+  if (nameInput) {
+    nameInput.addEventListener("input", saveName);
+  }
+});
