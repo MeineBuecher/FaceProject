@@ -12,6 +12,25 @@ let currentWorkerChannel = null;
 const SAVED_NAME_KEY = "faceproject_name";
 const SAVED_ROOM_KEY = "faceproject_room";
 
+let screenSlots = [
+  {
+    title: "Hauptscreen",
+    content: "Keine Freigabe aktiv"
+  },
+  {
+    title: "Screen 2",
+    content: "Keine Freigabe aktiv"
+  },
+  {
+    title: "Screen 3",
+    content: "Keine Freigabe aktiv"
+  },
+  {
+    title: "Screen 4",
+    content: "Keine Freigabe aktiv"
+  }
+];
+
 function setStatus(text) {
   const el = document.getElementById("status");
   if (el) el.innerText = text;
@@ -167,6 +186,45 @@ function getEnteredName() {
   }
 
   return name;
+}
+
+function renderScreens() {
+  const primary = document.getElementById("primaryScreen");
+  const thumb1 = document.getElementById("screenThumb1");
+  const thumb2 = document.getElementById("screenThumb2");
+  const thumb3 = document.getElementById("screenThumb3");
+
+  if (!primary || !thumb1 || !thumb2 || !thumb3) return;
+
+  const boxes = [primary, thumb1, thumb2, thumb3];
+
+  boxes.forEach((box, index) => {
+    const header = box.querySelector(".screen-slot-header");
+    const body = box.querySelector(".screen-slot-body");
+
+    if (header) {
+      header.textContent = screenSlots[index].title;
+    }
+
+    if (body) {
+      body.innerHTML = `<p>${screenSlots[index].content}</p>`;
+    }
+
+    box.classList.remove("screen-active");
+  });
+
+  primary.classList.add("screen-active");
+}
+
+function promoteScreen(index) {
+  if (index < 0 || index >= screenSlots.length) return;
+  if (index === 0) return;
+
+  const currentMain = screenSlots[0];
+  screenSlots[0] = screenSlots[index];
+  screenSlots[index] = currentMain;
+
+  renderScreens();
 }
 
 async function upsertParticipantStatus(statusValue) {
