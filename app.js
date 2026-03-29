@@ -10,6 +10,10 @@ let currentChannel = null;
 let currentWorkerChannel = null;
 let currentChatChannel = null;
 let currentStorageChannel = null;
+let currentScreenChannel = null;
+
+let localScreenStream = null;
+let isSharingScreen = false;
 
 const SAVED_NAME_KEY = "faceproject_name";
 const SAVED_ROOM_KEY = "faceproject_room";
@@ -79,6 +83,10 @@ function getTextsArea() {
   return document.getElementById("textsArea");
 }
 
+function getShareScreenBtn() {
+  return document.getElementById("shareScreenBtn");
+}
+
 function updateWorkButtons(activeWorkerName) {
   const workBtn = getWorkNowButton();
   const pauseBtn = getPauseWorkButton();
@@ -130,6 +138,20 @@ function updateWorkButtons(activeWorkerName) {
   stopBtn.disabled = true;
 }
 
+function updateShareButton() {
+  const btn = getShareScreenBtn();
+  if (!btn) return;
+
+  if (!currentRoom || !currentParticipantName) {
+    btn.disabled = true;
+    btn.textContent = "Freigeben";
+    return;
+  }
+
+  btn.disabled = false;
+  btn.textContent = isSharingScreen ? "Freigabe beenden" : "Freigeben";
+}
+
 function cleanupChannels() {
   if (currentChannel) {
     client.removeChannel(currentChannel);
@@ -149,6 +171,11 @@ function cleanupChannels() {
   if (currentStorageChannel) {
     client.removeChannel(currentStorageChannel);
     currentStorageChannel = null;
+  }
+
+  if (currentScreenChannel) {
+    client.removeChannel(currentScreenChannel);
+    currentScreenChannel = null;
   }
 }
 
@@ -383,11 +410,15 @@ async function joinRoom(options = {}) {
     await loadWorker();
     await loadChatMessages();
     await loadStorageItems();
+    await loadScreenStatus();
 
     subscribeRealtime();
     subscribeWorkerRealtime();
     subscribeChatRealtime();
     subscribeStorageRealtime();
+    subscribeScreenRealtime();
+
+    updateShareButton();
   } catch (err) {
     setStatus("JS-Fehler joinRoom: " + err.message);
   }
@@ -417,6 +448,10 @@ async function leaveRoom() {
           .delete()
           .eq("room_code", leavingRoom);
       }
+    }
+
+    if (isSharingScreen) {
+      await stopScreenShare(true);
     }
 
     await upsertParticipantStatus("verlassen");
@@ -449,7 +484,9 @@ async function leaveRoom() {
     const textsArea = getTextsArea();
     if (textsArea) textsArea.innerHTML = "<p>Noch keine Texte im Raum</p>";
 
+    renderScreens();
     updateWorkButtons(null);
+    updateShareButton();
     setStatus("Du hast den Raum verlassen");
   } catch (err) {
     setStatus("JS-Fehler leaveRoom: " + err.message);
@@ -632,6 +669,10 @@ async function pauseWork() {
       return;
     }
 
+    if (isSharingScreen) {
+      await stopScreenShare(true);
+    }
+
     await upsertParticipantStatus("pausiert");
 
     const { data: active, error: activeError } = await client
@@ -653,6 +694,7 @@ async function pauseWork() {
     setStatus(currentParticipantName + " hat den Raum pausiert");
     await loadParticipants();
     await loadWorker();
+    await loadScreenStatus();
   } catch (err) {
     setStatus("JS-Fehler pauseWork: " + err.message);
   }
@@ -714,6 +756,10 @@ async function stopWork() {
       return;
     }
 
+    if (isSharingScreen) {
+      await stopScreenShare(true);
+    }
+
     const { error: deleteError } = await client
       .from("active_worker")
       .delete()
@@ -726,6 +772,7 @@ async function stopWork() {
 
     setStatus(currentParticipantName + " hat die Arbeit beendet");
     await loadWorker();
+    await loadScreenStatus();
   } catch (err) {
     setStatus("JS-Fehler stopWork: " + err.message);
   }
@@ -967,6 +1014,212 @@ function subscribeStorageRealtime() {
   }
 }
 
+/* ================= SCREEN SHARE ================= */
+
+function showLocalScreen(stream) {
+  const primary = document.getElementById("primaryScreen");
+  if (!primary) return;
+
+  const body = primary.querySelector(".screen-slot-body");
+  if (!body) return;
+
+  const video = document.createElement("video");
+  video.srcObject = stream;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = true;
+  video.style.width = "100%";
+  video.style.height = "100%";
+  video.style.objectFit = "contain";
+  video.style.borderRadius = "12px";
+
+  body.innerHTML = "";
+  body.appendChild(video);
+}
+
+async function loadScreenStatus() {
+  try {
+    if (!currentRoom) return;
+
+    if (isSharingScreen && localScreenStream) {
+      updateShareButton();
+      return;
+    }
+
+    const { data, error } = await client
+      .from("screen_share")
+      .select("*")
+      .eq("room_code", currentRoom)
+      .eq("active", true)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setStatus("Screen-Status Fehler: " + error.message);
+      return;
+    }
+
+    renderScreens();
+
+    const activeShare = data && data.length > 0 ? data[0] : null;
+    if (!activeShare) {
+      updateShareButton();
+      return;
+    }
+
+    const primary = document.getElementById("primaryScreen");
+    if (!primary) return;
+
+    const body = primary.querySelector(".screen-slot-body");
+    if (!body) return;
+
+    body.innerHTML = `<p>${activeShare.owner} teilt gerade seinen Bildschirm</p>`;
+    updateShareButton();
+  } catch (err) {
+    setStatus("JS-Fehler loadScreenStatus: " + err.message);
+  }
+}
+
+function subscribeScreenRealtime() {
+  try {
+    if (!currentRoom) return;
+
+    if (currentScreenChannel) {
+      client.removeChannel(currentScreenChannel);
+    }
+
+    currentScreenChannel = client
+      .channel("screen-" + currentRoom)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "screen_share",
+          filter: "room_code=eq." + currentRoom
+        },
+        () => {
+          loadScreenStatus();
+        }
+      )
+      .subscribe();
+  } catch (err) {
+    setStatus("JS-Fehler screen realtime: " + err.message);
+  }
+}
+
+async function startScreenShare() {
+  try {
+    if (!currentRoom || !currentParticipantName) {
+      setStatus("Bitte erst Raum und Namen festlegen");
+      return;
+    }
+
+    if (currentParticipantStatus === "pausiert") {
+      setStatus("Du hast den Raum pausiert. Bitte zuerst Raum fortsetzen.");
+      return;
+    }
+
+    const { data: activeWorkerRows, error: workerError } = await client
+      .from("active_worker")
+      .select("*")
+      .eq("room_code", currentRoom)
+      .order("created_at", { ascending: false });
+
+    if (workerError) {
+      setStatus("Fehler beim Prüfen: " + workerError.message);
+      return;
+    }
+
+    if (!activeWorkerRows || activeWorkerRows.length === 0) {
+      setStatus("Nur der aktive Bearbeiter darf den Bildschirm teilen");
+      return;
+    }
+
+    const activeWorkerName = activeWorkerRows[0].worker_name;
+    if (activeWorkerName !== currentParticipantName) {
+      setStatus("Nur " + activeWorkerName + " darf den Bildschirm teilen");
+      return;
+    }
+
+    localScreenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: false
+    });
+
+    isSharingScreen = true;
+    updateShareButton();
+    showLocalScreen(localScreenStream);
+
+    const videoTrack = localScreenStream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.addEventListener("ended", () => {
+        stopScreenShare(true);
+      });
+    }
+
+    await client
+      .from("screen_share")
+      .delete()
+      .eq("room_code", currentRoom);
+
+    const { error: insertError } = await client
+      .from("screen_share")
+      .insert([
+        {
+          room_code: currentRoom,
+          owner: currentParticipantName,
+          active: true
+        }
+      ]);
+
+    if (insertError) {
+      setStatus("Fehler beim Starten der Freigabe: " + insertError.message);
+      return;
+    }
+
+    setStatus("Bildschirm wird geteilt");
+  } catch (err) {
+    setStatus("Screen Fehler: " + err.message);
+  }
+}
+
+async function stopScreenShare(silent = false) {
+  try {
+    if (localScreenStream) {
+      localScreenStream.getTracks().forEach(track => track.stop());
+      localScreenStream = null;
+    }
+
+    isSharingScreen = false;
+
+    if (currentRoom) {
+      await client
+        .from("screen_share")
+        .delete()
+        .eq("room_code", currentRoom)
+        .eq("owner", currentParticipantName);
+    }
+
+    renderScreens();
+    await loadScreenStatus();
+    updateShareButton();
+
+    if (!silent) {
+      setStatus("Bildschirmfreigabe beendet");
+    }
+  } catch (err) {
+    setStatus("JS-Fehler stopScreenShare: " + err.message);
+  }
+}
+
+async function toggleScreenShare() {
+  if (isSharingScreen) {
+    await stopScreenShare();
+  } else {
+    await startScreenShare();
+  }
+}
+
 function clearNameOnly() {
   clearSavedName();
   const input = document.getElementById("nameInput");
@@ -982,6 +1235,7 @@ async function restorePreviousSession() {
 
     if (!savedRoom || !savedName) {
       updateWorkButtons(null);
+      updateShareButton();
       return;
     }
 
@@ -1109,7 +1363,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  const shareScreenBtn = getShareScreenBtn();
+  if (shareScreenBtn) {
+    shareScreenBtn.addEventListener("click", async () => {
+      if (!currentRoom) {
+        setStatus("Bitte erst einem Raum beitreten");
+        return;
+      }
+
+      await toggleScreenShare();
+    });
+  }
+
   updateWorkButtons(null);
+  updateShareButton();
 
   await restorePreviousSession();
 });
