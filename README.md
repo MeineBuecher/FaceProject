@@ -5,38 +5,21 @@ FaceProject™ ist eine browserbasierte Plattform, die digitale Projekträume sc
 Die Idee ist einfach:
 Ein klarer, geschlossener Raum – wie eine echte Projektbesprechung – nur digital.
 
-## Vision
+## Aktueller Stand
 
-FaceProject™ verbindet Menschen nicht über Tools, sondern über einen gemeinsamen Raum.
-
-Statt viele einzelne Anwendungen zu nutzen, entsteht hier ein zentraler Ort, an dem alles zusammenkommt:
-Kommunikation, Zusammenarbeit und Sichtbarkeit.
-
-## Aktueller Stand (MVP)
-
-Die erste Version konzentriert sich auf die Grundlagen:
-
-* Erstellen eines Raumes
-* Beitreten über einen Raumcode
-* Verbindung mehrerer Teilnehmer
-* Anzeige von Statusinformationen
+- Raum erstellen
+- Raum beitreten über Code
+- Verbindung mit Supabase
 
 ## Technologie
 
-* HTML, CSS, JavaScript
-* Supabase (Backend & Datenbank)
-* GitHub (Versionsverwaltung)
-
-## Ziel
-
-Eine einfache, klare und stabile Plattform zu schaffen, die Zusammenarbeit so natürlich macht wie ein echtes Treffen – nur digital.
+- HTML, CSS, JavaScript
+- Supabase
+- GitHub
 
 ## Status
 
 In Entwicklung 🚀
 
----
-
 FaceProject™ ist kein Tool.
-
 Es ist ein Raum.
