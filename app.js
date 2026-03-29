@@ -11,9 +11,15 @@ let currentWorkerChannel = null;
 let currentChatChannel = null;
 let currentStorageChannel = null;
 let currentScreenChannel = null;
+let currentWebRTCChannel = null;
 
 let localScreenStream = null;
 let isSharingScreen = false;
+let currentScreenOwner = null;
+
+// WebRTC
+let peerConnections = {};
+let handledSignalIds = new Set();
 
 const SAVED_NAME_KEY = "faceproject_name";
 const SAVED_ROOM_KEY = "faceproject_room";
@@ -152,6 +158,15 @@ function updateShareButton() {
   btn.textContent = isSharingScreen ? "Freigabe beenden" : "Freigeben";
 }
 
+function closeAllPeerConnections() {
+  Object.values(peerConnections).forEach(pc => {
+    try {
+      pc.close();
+    } catch {}
+  });
+  peerConnections = {};
+}
+
 function cleanupChannels() {
   if (currentChannel) {
     client.removeChannel(currentChannel);
@@ -177,6 +192,14 @@ function cleanupChannels() {
     client.removeChannel(currentScreenChannel);
     currentScreenChannel = null;
   }
+
+  if (currentWebRTCChannel) {
+    client.removeChannel(currentWebRTCChannel);
+    currentWebRTCChannel = null;
+  }
+
+  closeAllPeerConnections();
+  handledSignalIds.clear();
 }
 
 function loadSavedName() {
@@ -417,6 +440,7 @@ async function joinRoom(options = {}) {
     subscribeChatRealtime();
     subscribeStorageRealtime();
     subscribeScreenRealtime();
+    subscribeWebRTCSignals();
 
     updateShareButton();
   } catch (err) {
@@ -461,6 +485,7 @@ async function leaveRoom() {
     currentRoom = null;
     currentParticipantName = null;
     currentParticipantStatus = null;
+    currentScreenOwner = null;
     clearSavedRoom();
 
     const ownerBox = getOwnerBox();
@@ -1037,11 +1062,33 @@ function showLocalScreen(stream) {
   body.appendChild(video);
 }
 
+function showRemoteScreen(stream) {
+  const primary = document.getElementById("primaryScreen");
+  if (!primary) return;
+
+  const body = primary.querySelector(".screen-slot-body");
+  if (!body) return;
+
+  const video = document.createElement("video");
+  video.srcObject = stream;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = true;
+  video.style.width = "100%";
+  video.style.height = "100%";
+  video.style.objectFit = "contain";
+  video.style.borderRadius = "12px";
+
+  body.innerHTML = "";
+  body.appendChild(video);
+}
+
 async function loadScreenStatus() {
   try {
     if (!currentRoom) return;
 
     if (isSharingScreen && localScreenStream) {
+      currentScreenOwner = currentParticipantName;
       updateShareButton();
       return;
     }
@@ -1058,10 +1105,20 @@ async function loadScreenStatus() {
       return;
     }
 
-    renderScreens();
-
     const activeShare = data && data.length > 0 ? data[0] : null;
+
     if (!activeShare) {
+      currentScreenOwner = null;
+      renderScreens();
+      closeAllPeerConnections();
+      updateShareButton();
+      return;
+    }
+
+    currentScreenOwner = activeShare.owner;
+
+    if (activeShare.owner === currentParticipantName && isSharingScreen && localScreenStream) {
+      showLocalScreen(localScreenStream);
       updateShareButton();
       return;
     }
@@ -1072,7 +1129,13 @@ async function loadScreenStatus() {
     const body = primary.querySelector(".screen-slot-body");
     if (!body) return;
 
-    body.innerHTML = `<p>${activeShare.owner} teilt gerade seinen Bildschirm</p>`;
+    if (!peerConnections[activeShare.owner]) {
+      body.innerHTML = `<p>${activeShare.owner} teilt gerade seinen Bildschirm … Verbindung wird aufgebaut.</p>`;
+      await announceViewerReady(activeShare.owner);
+    } else {
+      body.innerHTML = `<p>${activeShare.owner} teilt gerade seinen Bildschirm …</p>`;
+    }
+
     updateShareButton();
   } catch (err) {
     setStatus("JS-Fehler loadScreenStatus: " + err.message);
@@ -1104,6 +1167,216 @@ function subscribeScreenRealtime() {
       .subscribe();
   } catch (err) {
     setStatus("JS-Fehler screen realtime: " + err.message);
+  }
+}
+
+/* ================= WEBRTC ================= */
+
+function createPeerConnectionKey(name) {
+  return name;
+}
+
+async function announceViewerReady(ownerName) {
+  if (!currentRoom || !currentParticipantName || !ownerName) return;
+  if (ownerName === currentParticipantName) return;
+  if (peerConnections[createPeerConnectionKey(ownerName)]) return;
+
+  const { error } = await client.from("webrtc_signals").insert([
+    {
+      room_code: currentRoom,
+      sender: currentParticipantName,
+      target: ownerName,
+      type: "viewer_ready",
+      payload: { viewer: currentParticipantName }
+    }
+  ]);
+
+  if (error) {
+    setStatus("Viewer-Signal Fehler: " + error.message);
+  }
+}
+
+function createSenderPeerConnection(viewerName) {
+  const pc = new RTCPeerConnection();
+
+  if (localScreenStream) {
+    localScreenStream.getTracks().forEach(track => {
+      pc.addTrack(track, localScreenStream);
+    });
+  }
+
+  pc.onicecandidate = async (event) => {
+    if (!event.candidate) return;
+
+    await client.from("webrtc_signals").insert([
+      {
+        room_code: currentRoom,
+        sender: currentParticipantName,
+        target: viewerName,
+        type: "candidate",
+        payload: event.candidate
+      }
+    ]);
+  };
+
+  peerConnections[createPeerConnectionKey(viewerName)] = pc;
+  return pc;
+}
+
+function createViewerPeerConnection(ownerName) {
+  const pc = new RTCPeerConnection();
+
+  pc.ontrack = (event) => {
+    const stream = event.streams && event.streams[0] ? event.streams[0] : null;
+    if (stream) {
+      showRemoteScreen(stream);
+    }
+  };
+
+  pc.onicecandidate = async (event) => {
+    if (!event.candidate) return;
+
+    await client.from("webrtc_signals").insert([
+      {
+        room_code: currentRoom,
+        sender: currentParticipantName,
+        target: ownerName,
+        type: "candidate",
+        payload: event.candidate
+      }
+    ]);
+  };
+
+  peerConnections[createPeerConnectionKey(ownerName)] = pc;
+  return pc;
+}
+
+async function handleViewerReadySignal(signal) {
+  if (!isSharingScreen || !localScreenStream) return;
+  if (signal.target !== currentParticipantName) return;
+
+  const viewerName = signal.sender;
+  let pc = peerConnections[createPeerConnectionKey(viewerName)];
+
+  if (!pc) {
+    pc = createSenderPeerConnection(viewerName);
+  }
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  await client.from("webrtc_signals").insert([
+    {
+      room_code: currentRoom,
+      sender: currentParticipantName,
+      target: viewerName,
+      type: "offer",
+      payload: offer
+    }
+  ]);
+}
+
+async function handleOfferSignal(signal) {
+  if (signal.target !== currentParticipantName) return;
+  if (signal.sender === currentParticipantName) return;
+
+  currentScreenOwner = signal.sender;
+
+  let pc = peerConnections[createPeerConnectionKey(signal.sender)];
+  if (!pc) {
+    pc = createViewerPeerConnection(signal.sender);
+  }
+
+  await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+
+  await client.from("webrtc_signals").insert([
+    {
+      room_code: currentRoom,
+      sender: currentParticipantName,
+      target: signal.sender,
+      type: "answer",
+      payload: answer
+    }
+  ]);
+}
+
+async function handleAnswerSignal(signal) {
+  if (signal.target !== currentParticipantName) return;
+
+  const viewerName = signal.sender;
+  const pc = peerConnections[createPeerConnectionKey(viewerName)];
+  if (!pc) return;
+
+  await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+}
+
+async function handleCandidateSignal(signal) {
+  if (signal.target !== currentParticipantName) return;
+
+  const peerName = signal.sender;
+  const pc = peerConnections[createPeerConnectionKey(peerName)];
+  if (!pc) return;
+
+  try {
+    await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
+  } catch (err) {
+    console.log("ICE candidate konnte noch nicht gesetzt werden:", err);
+  }
+}
+
+async function handleWebRTCSignal(signal) {
+  if (!signal || handledSignalIds.has(signal.id)) return;
+  handledSignalIds.add(signal.id);
+
+  if (signal.type === "viewer_ready") {
+    await handleViewerReadySignal(signal);
+    return;
+  }
+
+  if (signal.type === "offer") {
+    await handleOfferSignal(signal);
+    return;
+  }
+
+  if (signal.type === "answer") {
+    await handleAnswerSignal(signal);
+    return;
+  }
+
+  if (signal.type === "candidate") {
+    await handleCandidateSignal(signal);
+  }
+}
+
+function subscribeWebRTCSignals() {
+  try {
+    if (!currentRoom) return;
+
+    if (currentWebRTCChannel) {
+      client.removeChannel(currentWebRTCChannel);
+    }
+
+    currentWebRTCChannel = client
+      .channel("webrtc-" + currentRoom)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "webrtc_signals",
+          filter: "room_code=eq." + currentRoom
+        },
+        async (payload) => {
+          const signal = payload.new;
+          await handleWebRTCSignal(signal);
+        }
+      )
+      .subscribe();
+  } catch (err) {
+    setStatus("JS-Fehler webrtc realtime: " + err.message);
   }
 }
 
@@ -1147,6 +1420,7 @@ async function startScreenShare() {
     });
 
     isSharingScreen = true;
+    currentScreenOwner = currentParticipantName;
     updateShareButton();
     showLocalScreen(localScreenStream);
 
@@ -1191,6 +1465,9 @@ async function stopScreenShare(silent = false) {
     }
 
     isSharingScreen = false;
+    currentScreenOwner = null;
+
+    closeAllPeerConnections();
 
     if (currentRoom) {
       await client
