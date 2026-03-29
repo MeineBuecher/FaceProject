@@ -7,7 +7,9 @@ let currentRoom = null;
 let currentParticipantName = null;
 let currentChannel = null;
 let currentWorkerChannel = null;
+
 const SAVED_NAME_KEY = "faceproject_name";
+const SAVED_ROOM_KEY = "faceproject_room";
 
 function setStatus(text) {
   const el = document.getElementById("status");
@@ -31,36 +33,83 @@ function getWorkNowButton() {
   return document.getElementById("workNowBtn");
 }
 
+function getPauseWorkButton() {
+  return document.getElementById("pauseWorkBtn");
+}
+
+function getResumeWorkButton() {
+  return document.getElementById("resumeWorkBtn");
+}
+
 function getStopWorkButton() {
   return document.getElementById("stopWorkBtn");
 }
 
-function updateWorkButtons(activeWorkerName) {
-  const workBtn = getWorkNowButton();
-  const stopBtn = getStopWorkButton();
+function getLeaveRoomButton() {
+  return document.getElementById("leaveRoomBtn");
+}
 
-  if (!workBtn || !stopBtn) return;
+function updateWorkButtons(activeWorkerName, workStatus = null) {
+  const workBtn = getWorkNowButton();
+  const pauseBtn = getPauseWorkButton();
+  const resumeBtn = getResumeWorkButton();
+  const stopBtn = getStopWorkButton();
+  const leaveBtn = getLeaveRoomButton();
+
+  if (leaveBtn) {
+    leaveBtn.disabled = !currentRoom || !currentParticipantName;
+  }
+
+  if (!workBtn || !pauseBtn || !resumeBtn || !stopBtn) return;
 
   if (!currentRoom || !currentParticipantName) {
     workBtn.disabled = true;
+    pauseBtn.disabled = true;
+    resumeBtn.disabled = true;
     stopBtn.disabled = true;
     return;
   }
 
   if (!activeWorkerName) {
     workBtn.disabled = false;
+    pauseBtn.disabled = true;
+    resumeBtn.disabled = true;
     stopBtn.disabled = true;
     return;
   }
 
   if (activeWorkerName === currentParticipantName) {
+    if (workStatus === "pausiert") {
+      workBtn.disabled = true;
+      pauseBtn.disabled = true;
+      resumeBtn.disabled = false;
+      stopBtn.disabled = false;
+      return;
+    }
+
     workBtn.disabled = true;
+    pauseBtn.disabled = false;
+    resumeBtn.disabled = true;
     stopBtn.disabled = false;
     return;
   }
 
   workBtn.disabled = true;
+  pauseBtn.disabled = true;
+  resumeBtn.disabled = true;
   stopBtn.disabled = true;
+}
+
+function cleanupChannels() {
+  if (currentChannel) {
+    client.removeChannel(currentChannel);
+    currentChannel = null;
+  }
+
+  if (currentWorkerChannel) {
+    client.removeChannel(currentWorkerChannel);
+    currentWorkerChannel = null;
+  }
 }
 
 function loadSavedName() {
@@ -87,6 +136,27 @@ function clearSavedName() {
   localStorage.removeItem(SAVED_NAME_KEY);
 }
 
+function saveRoomSession(roomCode) {
+  if (roomCode) {
+    localStorage.setItem(SAVED_ROOM_KEY, roomCode);
+  }
+}
+
+function loadSavedRoom() {
+  const savedRoom = localStorage.getItem(SAVED_ROOM_KEY);
+  const input = document.getElementById("roomInput");
+
+  if (savedRoom && input) {
+    input.value = savedRoom;
+  }
+
+  return savedRoom || "";
+}
+
+function clearSavedRoom() {
+  localStorage.removeItem(SAVED_ROOM_KEY);
+}
+
 function getEnteredName() {
   const input = document.getElementById("nameInput");
   const name = input ? input.value.trim() : "";
@@ -96,6 +166,52 @@ function getEnteredName() {
   }
 
   return name;
+}
+
+async function upsertParticipantStatus(statusValue) {
+  if (!currentRoom || !currentParticipantName) return;
+
+  const { data: existing, error: selectError } = await client
+    .from("participants")
+    .select("*")
+    .eq("room_code", currentRoom)
+    .eq("name", currentParticipantName)
+    .order("created_at", { ascending: true });
+
+  if (selectError) {
+    throw selectError;
+  }
+
+  if (existing && existing.length > 0) {
+    const firstRow = existing[0];
+    const { error: updateError } = await client
+      .from("participants")
+      .update({ status: statusValue })
+      .eq("id", firstRow.id);
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    if (existing.length > 1) {
+      const duplicateIds = existing.slice(1).map((row) => row.id);
+      if (duplicateIds.length > 0) {
+        await client.from("participants").delete().in("id", duplicateIds);
+      }
+    }
+  } else {
+    const { error: insertError } = await client.from("participants").insert([
+      {
+        room_code: currentRoom,
+        name: currentParticipantName,
+        status: statusValue
+      }
+    ]);
+
+    if (insertError) {
+      throw insertError;
+    }
+  }
 }
 
 async function createRoom() {
@@ -121,14 +237,20 @@ async function createRoom() {
       return;
     }
 
-    document.getElementById("roomInput").value = code;
-    await joinRoom();
+    const roomInput = document.getElementById("roomInput");
+    if (roomInput) {
+      roomInput.value = code;
+    }
+
+    await joinRoom({ restoring: false });
   } catch (err) {
     setStatus("JS-Fehler createRoom: " + err.message);
   }
 }
 
-async function joinRoom() {
+async function joinRoom(options = {}) {
+  const { restoring = false } = options;
+
   try {
     const code = document.getElementById("roomInput").value.trim();
     const name = getEnteredName();
@@ -159,31 +281,20 @@ async function joinRoom() {
       return;
     }
 
+    cleanupChannels();
+
     currentRoom = code;
     currentParticipantName = name;
 
-    const { data: existingParticipant } = await client
-      .from("participants")
-      .select("*")
-      .eq("room_code", code)
-      .eq("name", name)
-      .limit(1);
+    saveRoomSession(code);
 
-    if (!existingParticipant || existingParticipant.length === 0) {
-      const { error: insertError } = await client.from("participants").insert([
-        {
-          room_code: code,
-          name: name
-        }
-      ]);
+    await upsertParticipantStatus("online");
 
-      if (insertError) {
-        setStatus("Teilnehmer-Fehler: " + insertError.message);
-        return;
-      }
+    if (restoring) {
+      setStatus("Wieder verbunden mit: " + code + " als " + name);
+    } else {
+      setStatus("Verbunden mit: " + code + " als " + name);
     }
-
-    setStatus("Verbunden mit: " + code + " als " + name);
 
     await loadOwner();
     await loadParticipants();
@@ -193,6 +304,56 @@ async function joinRoom() {
     subscribeWorkerRealtime();
   } catch (err) {
     setStatus("JS-Fehler joinRoom: " + err.message);
+  }
+}
+
+async function leaveRoom() {
+  try {
+    if (!currentRoom || !currentParticipantName) {
+      setStatus("Du bist in keinem Raum");
+      return;
+    }
+
+    const leavingRoom = currentRoom;
+    const leavingName = currentParticipantName;
+
+    const { data: active, error: activeError } = await client
+      .from("active_worker")
+      .select("*")
+      .eq("room_code", leavingRoom)
+      .order("created_at", { ascending: false });
+
+    if (!activeError && active && active.length > 0) {
+      const activeWorker = active[0];
+      if (activeWorker.worker_name === leavingName) {
+        await client
+          .from("active_worker")
+          .delete()
+          .eq("room_code", leavingRoom);
+      }
+    }
+
+    await upsertParticipantStatus("verlassen");
+
+    cleanupChannels();
+
+    currentRoom = null;
+    currentParticipantName = null;
+    clearSavedRoom();
+
+    const ownerBox = getOwnerBox();
+    if (ownerBox) ownerBox.innerHTML = "";
+
+    const participantsBox = getParticipantsBox();
+    if (participantsBox) participantsBox.innerHTML = "";
+
+    const workerBox = getWorkerBox();
+    if (workerBox) workerBox.innerHTML = "<h3>Aktiv:</h3><p>Gerade arbeitet niemand</p>";
+
+    updateWorkButtons(null);
+    setStatus("Du hast den Raum verlassen");
+  } catch (err) {
+    setStatus("JS-Fehler leaveRoom: " + err.message);
   }
 }
 
@@ -254,8 +415,15 @@ function renderParticipants(list) {
     return;
   }
 
+  const latestByName = new Map();
+
   list.forEach((p) => {
-    html += `<div>${p.name}</div>`;
+    latestByName.set(p.name, p);
+  });
+
+  latestByName.forEach((p) => {
+    const statusText = p.status ? ` – ${p.status}` : "";
+    html += `<div>${p.name}${statusText}</div>`;
   });
 
   box.innerHTML = html;
@@ -300,7 +468,7 @@ async function workNow() {
       .from("active_worker")
       .select("*")
       .eq("room_code", currentRoom)
-      .limit(1);
+      .order("created_at", { ascending: false });
 
     if (activeError) {
       setStatus("Fehler beim Prüfen: " + activeError.message);
@@ -309,9 +477,16 @@ async function workNow() {
 
     if (active && active.length > 0) {
       const currentWorker = active[0].worker_name;
+      const currentWorkStatus = active[0].work_status || "aktiv";
 
       if (currentWorker !== currentParticipantName) {
         setStatus(currentWorker + " arbeitet gerade. Du kannst erst übernehmen, wenn die Arbeit beendet wurde.");
+        await loadWorker();
+        return;
+      }
+
+      if (currentWorkStatus === "pausiert") {
+        setStatus("Deine Arbeit ist pausiert. Nutze bitte Arbeit fortsetzen.");
         await loadWorker();
         return;
       }
@@ -324,7 +499,8 @@ async function workNow() {
     const { error } = await client.from("active_worker").insert([
       {
         room_code: currentRoom,
-        worker_name: currentParticipantName
+        worker_name: currentParticipantName,
+        work_status: "aktiv"
       }
     ]);
 
@@ -340,6 +516,116 @@ async function workNow() {
   }
 }
 
+async function pauseWork() {
+  try {
+    if (!currentRoom || !currentParticipantName) {
+      setStatus("Bitte erst Raum und Namen festlegen");
+      return;
+    }
+
+    const { data, error } = await client
+      .from("active_worker")
+      .select("*")
+      .eq("room_code", currentRoom)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setStatus("Fehler beim Prüfen: " + error.message);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setStatus("Gerade arbeitet niemand");
+      await loadWorker();
+      return;
+    }
+
+    const activeRow = data[0];
+
+    if (activeRow.worker_name !== currentParticipantName) {
+      setStatus("Nur " + activeRow.worker_name + " kann die Arbeit pausieren");
+      await loadWorker();
+      return;
+    }
+
+    if ((activeRow.work_status || "aktiv") === "pausiert") {
+      setStatus("Deine Arbeit ist bereits pausiert");
+      await loadWorker();
+      return;
+    }
+
+    const { error: updateError } = await client
+      .from("active_worker")
+      .update({ work_status: "pausiert" })
+      .eq("id", activeRow.id);
+
+    if (updateError) {
+      setStatus("Fehler beim Pausieren: " + updateError.message);
+      return;
+    }
+
+    setStatus(currentParticipantName + " hat die Arbeit pausiert");
+    await loadWorker();
+  } catch (err) {
+    setStatus("JS-Fehler pauseWork: " + err.message);
+  }
+}
+
+async function resumeWork() {
+  try {
+    if (!currentRoom || !currentParticipantName) {
+      setStatus("Bitte erst Raum und Namen festlegen");
+      return;
+    }
+
+    const { data, error } = await client
+      .from("active_worker")
+      .select("*")
+      .eq("room_code", currentRoom)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setStatus("Fehler beim Prüfen: " + error.message);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setStatus("Es gibt keine pausierte Arbeit");
+      await loadWorker();
+      return;
+    }
+
+    const activeRow = data[0];
+
+    if (activeRow.worker_name !== currentParticipantName) {
+      setStatus("Nur " + activeRow.worker_name + " kann die Arbeit fortsetzen");
+      await loadWorker();
+      return;
+    }
+
+    if ((activeRow.work_status || "aktiv") !== "pausiert") {
+      setStatus("Deine Arbeit ist nicht pausiert");
+      await loadWorker();
+      return;
+    }
+
+    const { error: updateError } = await client
+      .from("active_worker")
+      .update({ work_status: "aktiv" })
+      .eq("id", activeRow.id);
+
+    if (updateError) {
+      setStatus("Fehler beim Fortsetzen: " + updateError.message);
+      return;
+    }
+
+    setStatus(currentParticipantName + " hat die Arbeit fortgesetzt");
+    await loadWorker();
+  } catch (err) {
+    setStatus("JS-Fehler resumeWork: " + err.message);
+  }
+}
+
 async function stopWork() {
   try {
     if (!currentRoom || !currentParticipantName) {
@@ -351,7 +637,7 @@ async function stopWork() {
       .from("active_worker")
       .select("*")
       .eq("room_code", currentRoom)
-      .limit(1);
+      .order("created_at", { ascending: false });
 
     if (error) {
       setStatus("Fehler beim Prüfen: " + error.message);
@@ -375,8 +661,7 @@ async function stopWork() {
     const { error: deleteError } = await client
       .from("active_worker")
       .delete()
-      .eq("room_code", currentRoom)
-      .eq("worker_name", currentParticipantName);
+      .eq("room_code", currentRoom);
 
     if (deleteError) {
       setStatus("Fehler beim Beenden: " + deleteError.message);
@@ -399,27 +684,29 @@ async function loadWorker() {
       .from("active_worker")
       .select("*")
       .eq("room_code", currentRoom)
-      .limit(1);
+      .order("created_at", { ascending: false });
 
     if (error) {
       box.innerHTML = "<h3>Aktiv:</h3><p>Arbeitsstatus konnte nicht geladen werden</p>";
-      updateWorkButtons(null);
+      updateWorkButtons(null, null);
       return;
     }
 
     if (!data || data.length === 0) {
       box.innerHTML = "<h3>Aktiv:</h3><p>Gerade arbeitet niemand</p>";
-      updateWorkButtons(null);
+      updateWorkButtons(null, null);
       return;
     }
 
     const activeWorkerName = data[0].worker_name;
+    const workStatus = data[0].work_status || "aktiv";
+    const statusSuffix = workStatus === "pausiert" ? " (pausiert)" : "";
 
-    box.innerHTML = `<h3>Aktiv:</h3><p>${activeWorkerName}</p>`;
-    updateWorkButtons(activeWorkerName);
+    box.innerHTML = `<h3>Aktiv:</h3><p>${activeWorkerName}${statusSuffix}</p>`;
+    updateWorkButtons(activeWorkerName, workStatus);
   } catch (err) {
     setStatus("JS-Fehler loadWorker: " + err.message);
-    updateWorkButtons(null);
+    updateWorkButtons(null, null);
   }
 }
 
@@ -458,13 +745,43 @@ function clearNameOnly() {
   setStatus("Gespeicherter Name wurde gelöscht");
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+async function restorePreviousSession() {
+  try {
+    loadSavedName();
+    const savedRoom = loadSavedRoom();
+    const savedName = localStorage.getItem(SAVED_NAME_KEY);
+
+    if (!savedRoom || !savedName) {
+      updateWorkButtons(null, null);
+      return;
+    }
+
+    const roomInput = document.getElementById("roomInput");
+    if (roomInput) {
+      roomInput.value = savedRoom;
+    }
+
+    const nameInput = document.getElementById("nameInput");
+    if (nameInput) {
+      nameInput.value = savedName;
+    }
+
+    await joinRoom({ restoring: true });
+  } catch (err) {
+    setStatus("JS-Fehler restorePreviousSession: " + err.message);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
   loadSavedName();
+  loadSavedRoom();
 
   const nameInput = document.getElementById("nameInput");
   if (nameInput) {
     nameInput.addEventListener("input", saveName);
   }
 
-  updateWorkButtons(null);
+  updateWorkButtons(null, null);
+
+  await restorePreviousSession();
 });
