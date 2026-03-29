@@ -93,40 +93,43 @@
         <div class="workspace-card">
           <div class="workspace-card-header">
             <h3>Bildschirmfreigaben</h3>
-            <span class="workspace-mini-info">Bis zu 4 Screens zum direkten Vergleich</span>
+            <span class="workspace-mini-info">1 Hauptscreen oben, 3 Vergleichs-Screens unten</span>
           </div>
 
-          <div class="screens-grid" id="screenArea">
-            <div class="screen-slot">
-              <div class="screen-slot-header">Screen 1</div>
+          <div class="screens-stage" id="screenArea">
+            <div class="primary-screen screen-active" id="primaryScreen" onclick="promoteScreen(0)">
+              <div class="screen-slot-header">Hauptscreen</div>
               <div class="screen-slot-body">
                 <p>Keine Freigabe aktiv</p>
               </div>
             </div>
 
-            <div class="screen-slot">
-              <div class="screen-slot-header">Screen 2</div>
-              <div class="screen-slot-body">
-                <p>Keine Freigabe aktiv</p>
+            <div class="secondary-screens">
+              <div class="screen-slot secondary-screen" id="screenThumb1" onclick="promoteScreen(1)">
+                <div class="screen-slot-header">Screen 2</div>
+                <div class="screen-slot-body">
+                  <p>Keine Freigabe aktiv</p>
+                </div>
               </div>
-            </div>
 
-            <div class="screen-slot">
-              <div class="screen-slot-header">Screen 3</div>
-              <div class="screen-slot-body">
-                <p>Keine Freigabe aktiv</p>
+              <div class="screen-slot secondary-screen" id="screenThumb2" onclick="promoteScreen(2)">
+                <div class="screen-slot-header">Screen 3</div>
+                <div class="screen-slot-body">
+                  <p>Keine Freigabe aktiv</p>
+                </div>
               </div>
-            </div>
 
-            <div class="screen-slot">
-              <div class="screen-slot-header">Screen 4</div>
-              <div class="screen-slot-body">
-                <p>Keine Freigabe aktiv</p>
+              <div class="screen-slot secondary-screen" id="screenThumb3" onclick="promoteScreen(3)">
+                <div class="screen-slot-header">Screen 4</div>
+                <div class="screen-slot-body">
+                  <p>Keine Freigabe aktiv</p>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
     </div>
   </div>
 
