@@ -111,10 +111,6 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function escapeAttr(value) {
-  return escapeHtml(value);
-}
-
 function normalizeStoredValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim();
@@ -122,7 +118,6 @@ function normalizeStoredValue(value) {
 
 function normalizeUrl(value) {
   let url = normalizeStoredValue(value);
-
   if (!url) return "";
 
   if (
@@ -392,6 +387,40 @@ async function uploadToStorage(file, kind) {
     path,
     url: publicData.publicUrl
   };
+}
+
+async function deleteStorageItem(itemId, storagePath) {
+  try {
+    if (!itemId) return;
+
+    const confirmDelete = confirm("Diesen Eintrag wirklich löschen?");
+    if (!confirmDelete) return;
+
+    if (storagePath) {
+      const { error: storageError } = await client.storage
+        .from(STORAGE_BUCKET)
+        .remove([storagePath]);
+
+      if (storageError) {
+        console.warn("Storage-Löschen fehlgeschlagen:", storageError.message);
+      }
+    }
+
+    const { error: dbError } = await client
+      .from("storage_items")
+      .delete()
+      .eq("id", itemId);
+
+    if (dbError) {
+      setStatus("Löschen fehlgeschlagen: " + dbError.message);
+      return;
+    }
+
+    await loadStorageItems();
+    setStatus("Eintrag gelöscht");
+  } catch (err) {
+    setStatus("JS-Fehler deleteStorageItem: " + err.message);
+  }
 }
 
 async function upsertParticipantStatus(statusValue) {
@@ -1059,63 +1088,124 @@ function subscribeChatRealtime() {
   }
 }
 
-function renderFileItems(fileItems) {
-  if (!fileItems.length) {
-    return "<p>Noch keine Dateien im Raum</p>";
-  }
-
-  return fileItems.map(item => {
-    const safeUrl = normalizeUrl(item.content || "#");
-    const label = escapeHtml(item.file_name || "Datei öffnen");
-
-    return `
-      <div style="margin-bottom:10px;">
-        <a href="${escapeAttr(safeUrl || "#")}" target="_blank" rel="noopener noreferrer">${label}</a>
-      </div>
-    `;
-  }).join("");
+function createDeleteButton(itemId, storagePath) {
+  const btn = document.createElement("button");
+  btn.textContent = "Löschen";
+  btn.style.marginTop = "8px";
+  btn.style.padding = "8px 12px";
+  btn.style.border = "none";
+  btn.style.borderRadius = "10px";
+  btn.style.background = "#ff5a3c";
+  btn.style.color = "#fff";
+  btn.style.cursor = "pointer";
+  btn.addEventListener("click", async () => {
+    await deleteStorageItem(itemId, storagePath);
+  });
+  return btn;
 }
 
-function renderImageItems(imageItems) {
-  if (!imageItems.length) {
-    return "<p>Noch keine Bilder im Raum</p>";
+function renderFileItemsToDom(fileItems, container) {
+  container.innerHTML = "";
+
+  if (!fileItems.length) {
+    container.innerHTML = "<p>Noch keine Dateien im Raum</p>";
+    return;
   }
 
-  return imageItems.map(item => {
-    const safeUrl = normalizeUrl(item.content || "");
-    const altText = escapeAttr(item.file_name || "Bild");
+  fileItems.forEach(item => {
+    const wrapper = document.createElement("div");
+    wrapper.style.marginBottom = "12px";
+    wrapper.style.padding = "12px";
+    wrapper.style.background = "#fff";
+    wrapper.style.borderRadius = "12px";
 
-    if (!safeUrl || !isLikelyImageUrl(safeUrl)) {
-      return `
-        <div style="margin-bottom:12px; padding:12px; border:1px solid #ddd; border-radius:12px; background:#fff;">
-          <div style="font-size:14px; color:#666;">Bild konnte nicht geladen werden</div>
-        </div>
-      `;
+    const link = document.createElement("a");
+    link.href = normalizeUrl(item.content || "#");
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = item.file_name || "Datei öffnen";
+
+    wrapper.appendChild(link);
+    wrapper.appendChild(createDeleteButton(item.id, item.storage_path || ""));
+    container.appendChild(wrapper);
+  });
+}
+
+function renderImageItemsToDom(imageItems, container) {
+  container.innerHTML = "";
+
+  if (!imageItems.length) {
+    container.innerHTML = "<p>Noch keine Bilder im Raum</p>";
+    return;
+  }
+
+  imageItems.forEach(item => {
+    const wrapper = document.createElement("div");
+    wrapper.style.marginBottom = "12px";
+    wrapper.style.padding = "12px";
+    wrapper.style.background = "#fff";
+    wrapper.style.borderRadius = "12px";
+
+    const url = normalizeUrl(item.content || "");
+
+    if (!url || !isLikelyImageUrl(url)) {
+      const msg = document.createElement("div");
+      msg.textContent = "Bild-URL ungültig";
+      msg.style.color = "#666";
+      wrapper.appendChild(msg);
+      wrapper.appendChild(createDeleteButton(item.id, item.storage_path || ""));
+      container.appendChild(wrapper);
+      return;
     }
 
-    return `
-      <div style="margin-bottom:12px;">
-        <img
-          src="${escapeAttr(safeUrl)}"
-          alt="${altText}"
-          style="max-width:100%; width:100%; border-radius:12px; display:block;"
-          loading="lazy"
-          onerror="this.onerror=null; this.parentElement.innerHTML='<div style=&quot;padding:12px; border:1px solid #ddd; border-radius:12px; background:#fff; font-size:14px; color:#666;&quot;>Bild konnte nicht geladen werden</div>';"
-        >
-      </div>
-    `;
-  }).join("");
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = item.file_name || "Bild";
+    img.style.maxWidth = "100%";
+    img.style.width = "100%";
+    img.style.borderRadius = "12px";
+    img.style.display = "block";
+    img.style.marginBottom = "8px";
+
+    img.onerror = () => {
+      wrapper.innerHTML = "";
+      const msg = document.createElement("div");
+      msg.textContent = "Bild konnte nicht geladen werden";
+      msg.style.color = "#666";
+      msg.style.marginBottom = "8px";
+      wrapper.appendChild(msg);
+      wrapper.appendChild(createDeleteButton(item.id, item.storage_path || ""));
+    };
+
+    wrapper.appendChild(img);
+    wrapper.appendChild(createDeleteButton(item.id, item.storage_path || ""));
+    container.appendChild(wrapper);
+  });
 }
 
-function renderTextItems(textItems) {
+function renderTextItemsToDom(textItems, container) {
+  container.innerHTML = "";
+
   if (!textItems.length) {
-    return "<p>Noch keine Texte im Raum</p>";
+    container.innerHTML = "<p>Noch keine Texte im Raum</p>";
+    return;
   }
 
-  return textItems.map(item => {
-    const text = escapeHtml(item.content || "");
-    return `<div style="margin-bottom:10px; white-space:pre-wrap;">${text}</div>`;
-  }).join("");
+  textItems.forEach(item => {
+    const wrapper = document.createElement("div");
+    wrapper.style.marginBottom = "12px";
+    wrapper.style.padding = "12px";
+    wrapper.style.background = "#fff";
+    wrapper.style.borderRadius = "12px";
+
+    const text = document.createElement("div");
+    text.style.whiteSpace = "pre-wrap";
+    text.textContent = item.content || "";
+
+    wrapper.appendChild(text);
+    wrapper.appendChild(createDeleteButton(item.id, item.storage_path || ""));
+    container.appendChild(wrapper);
+  });
 }
 
 async function loadStorageItems() {
@@ -1142,14 +1232,13 @@ async function loadStorageItems() {
     }
 
     const items = data || [];
-
     const fileItems = items.filter(item => item.type === "file");
     const imageItems = items.filter(item => item.type === "image");
     const textItems = items.filter(item => item.type === "text");
 
-    files.innerHTML = renderFileItems(fileItems);
-    images.innerHTML = renderImageItems(imageItems);
-    texts.innerHTML = renderTextItems(textItems);
+    renderFileItemsToDom(fileItems, files);
+    renderImageItemsToDom(imageItems, images);
+    renderTextItemsToDom(textItems, texts);
   } catch (err) {
     setStatus("JS-Fehler loadStorageItems: " + err.message);
   }
