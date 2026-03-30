@@ -138,6 +138,59 @@ button:disabled {
   border: 1px solid #f0b3b3;
 }
 
+/* EXPERTENBEREICH */
+#expertPanel {
+  background: #fafafa;
+  border: 1px solid #ececec;
+  border-radius: 18px;
+  padding: 14px;
+  text-align: left;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+#expertPanel h3 {
+  margin: 0 0 10px;
+  font-size: 1.1rem;
+  text-align: center;
+}
+
+#expertPanel input[type="text"],
+#expertPanel input[type="number"] {
+  width: 100%;
+  padding: 12px 14px;
+  margin-top: 6px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  border: 2px solid #d9d9d9;
+  font-size: 1rem;
+  background: white;
+}
+
+#expertPanel label {
+  display: block;
+  font-weight: bold;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+#expertPanel > div {
+  word-break: break-word;
+}
+
+#expertPanel button {
+  width: auto;
+  min-width: 160px;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  padding: 12px 16px;
+  border-radius: 14px;
+}
+
+#expertPanel strong {
+  color: #222;
+}
+
 .workspace {
   background: rgba(255, 255, 255, 0.18);
   border-radius: 24px;
@@ -457,6 +510,12 @@ button:disabled {
   .chat-input-row button {
     width: 100%;
   }
+
+  #expertPanel button {
+    width: 100%;
+    min-width: 0;
+    margin-right: 0;
+  }
 }
 
 @media (max-width: 600px) {
@@ -498,7 +557,8 @@ button:disabled {
   .workspace-card-body,
   .workspace-mini-info,
   .screen-slot-body,
-  .chat-messages {
+  .chat-messages,
+  #expertPanel {
     font-size: 0.95rem;
   }
 
@@ -508,7 +568,8 @@ button:disabled {
 
   .workspace-card-header h3,
   .status-card h3,
-  .participants-card h3 {
+  .participants-card h3,
+  #expertPanel h3 {
     font-size: 1.05rem;
   }
 
@@ -543,5 +604,16 @@ button:disabled {
   .chat-messages {
     min-height: 180px;
     max-height: 260px;
+  }
+
+  #expertPanel {
+    padding: 12px;
+  }
+
+  #expertPanel input[type="text"],
+  #expertPanel input[type="number"] {
+    font-size: 1rem;
+    padding: 12px;
+    border-radius: 12px;
   }
 }
