@@ -102,6 +102,49 @@ function getShareScreenBtn() {
   return document.getElementById("shareScreenBtn");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
+function normalizeStoredValue(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function normalizeUrl(value) {
+  let url = normalizeStoredValue(value);
+
+  if (!url) return "";
+
+  if (
+    (url.startsWith('"') && url.endsWith('"')) ||
+    (url.startsWith("'") && url.endsWith("'"))
+  ) {
+    url = url.slice(1, -1).trim();
+  }
+
+  return url;
+}
+
+function isLikelyImageUrl(url) {
+  const testUrl = normalizeUrl(url).toLowerCase();
+  return (
+    testUrl.startsWith("http://") ||
+    testUrl.startsWith("https://") ||
+    testUrl.startsWith("blob:") ||
+    testUrl.startsWith("data:image/")
+  );
+}
+
 function updateWorkButtons(activeWorkerName) {
   const workBtn = getWorkNowButton();
   const pauseBtn = getPauseWorkButton();
@@ -286,7 +329,7 @@ function renderScreens() {
     }
 
     if (body) {
-      body.innerHTML = `<p>${screenSlots[index].content}</p>`;
+      body.innerHTML = `<p>${escapeHtml(screenSlots[index].content)}</p>`;
     }
 
     box.classList.remove("screen-active");
@@ -590,7 +633,7 @@ async function loadOwner() {
       return;
     }
 
-    box.innerHTML = `<strong>Raumersteller:</strong><br>${data[0].owner_name || "Unbekannt"}`;
+    box.innerHTML = `<strong>Raumersteller:</strong><br>${escapeHtml(data[0].owner_name || "Unbekannt")}`;
   } catch (err) {
     setStatus("JS-Fehler loadOwner: " + err.message);
   }
@@ -641,8 +684,8 @@ function renderParticipants(list) {
       currentParticipantStatus = p.status || "online";
     }
 
-    const statusText = p.status ? ` – ${p.status}` : "";
-    html += `<div>${p.name}${statusText}</div>`;
+    const statusText = p.status ? ` – ${escapeHtml(p.status)}` : "";
+    html += `<div>${escapeHtml(p.name)}${statusText}</div>`;
   });
 
   box.innerHTML = html;
@@ -882,7 +925,7 @@ async function loadWorker() {
 
     const activeWorkerName = data[0].worker_name;
 
-    box.innerHTML = `<h3>Aktiv:</h3><p>${activeWorkerName}</p>`;
+    box.innerHTML = `<h3>Aktiv:</h3><p>${escapeHtml(activeWorkerName)}</p>`;
     updateWorkButtons(activeWorkerName);
   } catch (err) {
     setStatus("JS-Fehler loadWorker: " + err.message);
@@ -977,8 +1020,8 @@ async function loadChatMessages() {
 
     box.innerHTML = data.map(msg => `
       <div class="chat-message">
-        <strong>${msg.sender_name}</strong>
-        <div>${msg.message}</div>
+        <strong>${escapeHtml(msg.sender_name)}</strong>
+        <div>${escapeHtml(msg.message)}</div>
       </div>
     `).join("");
 
@@ -1022,11 +1065,12 @@ function renderFileItems(fileItems) {
   }
 
   return fileItems.map(item => {
-    const safeUrl = item.content || "#";
-    const label = item.file_name || "Datei öffnen";
+    const safeUrl = normalizeUrl(item.content || "#");
+    const label = escapeHtml(item.file_name || "Datei öffnen");
+
     return `
       <div style="margin-bottom:10px;">
-        <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>
+        <a href="${escapeAttr(safeUrl || "#")}" target="_blank" rel="noopener noreferrer">${label}</a>
       </div>
     `;
   }).join("");
@@ -1038,11 +1082,26 @@ function renderImageItems(imageItems) {
   }
 
   return imageItems.map(item => {
-    const safeUrl = item.content || "";
-    const altText = item.file_name || "Bild";
+    const safeUrl = normalizeUrl(item.content || "");
+    const altText = escapeAttr(item.file_name || "Bild");
+
+    if (!safeUrl || !isLikelyImageUrl(safeUrl)) {
+      return `
+        <div style="margin-bottom:12px; padding:12px; border:1px solid #ddd; border-radius:12px; background:#fff;">
+          <div style="font-size:14px; color:#666;">Bild konnte nicht geladen werden</div>
+        </div>
+      `;
+    }
+
     return `
       <div style="margin-bottom:12px;">
-        <img src="${safeUrl}" alt="${altText}" style="max-width:100%; border-radius:12px; display:block;">
+        <img
+          src="${escapeAttr(safeUrl)}"
+          alt="${altText}"
+          style="max-width:100%; width:100%; border-radius:12px; display:block;"
+          loading="lazy"
+          onerror="this.onerror=null; this.parentElement.innerHTML='<div style=&quot;padding:12px; border:1px solid #ddd; border-radius:12px; background:#fff; font-size:14px; color:#666;&quot;>Bild konnte nicht geladen werden</div>';"
+        >
       </div>
     `;
   }).join("");
@@ -1054,7 +1113,7 @@ function renderTextItems(textItems) {
   }
 
   return textItems.map(item => {
-    const text = item.content || "";
+    const text = escapeHtml(item.content || "");
     return `<div style="margin-bottom:10px; white-space:pre-wrap;">${text}</div>`;
   }).join("");
 }
@@ -1215,12 +1274,12 @@ async function loadScreenStatus() {
     if (!body) return;
 
     if (!peerConnections[activeShare.owner]) {
-      body.innerHTML = `<p>${activeShare.owner} verbindet…</p>`;
+      body.innerHTML = `<p>${escapeHtml(activeShare.owner)} verbindet…</p>`;
       setTimeout(() => {
         announceViewerReady(activeShare.owner);
       }, 500);
     } else {
-      body.innerHTML = `<p>${activeShare.owner} verbunden</p>`;
+      body.innerHTML = `<p>${escapeHtml(activeShare.owner)} verbunden</p>`;
     }
 
     updateShareButton();
