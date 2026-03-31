@@ -1,6 +1,6 @@
-# FaceProject™
+# TableProject™
 
-FaceProject™ ist eine browserbasierte Plattform, die digitale Projekträume schafft, in denen sich Menschen und Geräte verbinden und gemeinsam in Echtzeit arbeiten können.
+TableProject™ ist eine browserbasierte Plattform, die digitale Projekträume schafft, in denen sich Menschen und Geräte verbinden und gemeinsam in Echtzeit arbeiten können.
 
 Die Idee ist einfach:
 Ein klarer, geschlossener Raum – wie eine echte Projektbesprechung – nur digital.
@@ -21,5 +21,5 @@ Ein klarer, geschlossener Raum – wie eine echte Projektbesprechung – nur dig
 
 In Entwicklung 🚀
 
-FaceProject™ ist kein Tool.
+TableProject™ ist kein Tool.
 Es ist ein Raum.
