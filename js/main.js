@@ -5,6 +5,13 @@ import { client } from "./supabase.js";
 import * as state from "./state.js";
 
 // =============================
+// REALTIME CHANNELS
+// =============================
+
+let participantChannel = null;
+let chatChannel = null;
+
+// =============================
 // BASIS FUNKTIONEN
 // =============================
 
@@ -96,6 +103,78 @@ async function joinRoom() {
 
   loadParticipants();
   loadChat();
+
+  // 🔥 REALTIME START
+  subscribeParticipantsRealtime();
+  subscribeChatRealtime();
+}
+
+// =============================
+// REALTIME TEILNEHMER
+// =============================
+
+function subscribeParticipantsRealtime() {
+  if (!state.currentRoom) return;
+
+  if (participantChannel) {
+    client.removeChannel(participantChannel);
+  }
+
+  participantChannel = client
+    .channel("participants-" + state.currentRoom)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "participants",
+        filter: "room_code=eq." + state.currentRoom
+      },
+      () => {
+        loadParticipants();
+      }
+    )
+    .subscribe();
+}
+
+// =============================
+// REALTIME CHAT
+// =============================
+
+function subscribeChatRealtime() {
+  if (!state.currentRoom) return;
+
+  if (chatChannel) {
+    client.removeChannel(chatChannel);
+  }
+
+  chatChannel = client
+    .channel("chat-" + state.currentRoom)
+    .on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "chat_messages",
+        filter: "room_code=eq." + state.currentRoom
+      },
+      (payload) => {
+        appendChatMessage(payload.new);
+      }
+    )
+    .subscribe();
+}
+
+function appendChatMessage(msg) {
+  const box = document.getElementById("chatMessages");
+
+  if (!box) return;
+
+  const div = document.createElement("div");
+  div.innerHTML = `<strong>${msg.sender_name}</strong><br>${msg.message}`;
+
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
 }
 
 // =============================
@@ -150,7 +229,7 @@ async function sendChatMessage() {
 
   input.value = "";
 
-  loadChat();
+  // ❌ KEIN loadChat mehr → Realtime übernimmt
 }
 
 async function loadChat() {
@@ -204,6 +283,17 @@ async function stopWork() {
 }
 
 async function leaveRoom() {
+  // 🔥 Channels sauber schließen
+  if (participantChannel) {
+    client.removeChannel(participantChannel);
+    participantChannel = null;
+  }
+
+  if (chatChannel) {
+    client.removeChannel(chatChannel);
+    chatChannel = null;
+  }
+
   state.currentRoom = null;
   state.currentParticipantName = null;
 
