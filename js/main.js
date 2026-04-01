@@ -15,6 +15,32 @@ let screenChannel = null;
 let webrtcChannel = null;
 
 // =============================
+// STABILITY SYSTEM 🔥
+// =============================
+
+let reconnectTimer = null;
+
+function safeTimeout(fn, delay = 500) {
+  setTimeout(() => {
+    try { fn(); } catch {}
+  }, delay);
+}
+
+function startReconnectWatcher() {
+  if (reconnectTimer) clearInterval(reconnectTimer);
+
+  reconnectTimer = setInterval(() => {
+    if (!state.currentRoom) return;
+
+    if (!webrtcChannel) {
+      console.log("🔁 reconnect...");
+      subscribeWebRTC();
+      loadScreens();
+    }
+  }, 3000);
+}
+
+// =============================
 // SCREEN STATE
 // =============================
 
@@ -92,6 +118,7 @@ async function joinRoom() {
 
   loadScreens();
   subscribeWebRTC();
+  startReconnectWatcher(); // 🔥 NEU
 }
 
 // =============================
@@ -115,9 +142,13 @@ function subscribeWebRTC() {
       },
       async (payload) => {
         const signal = payload.new;
-        if (handledSignals.has(signal.id)) return;
 
+        if (handledSignals.has(signal.id)) return;
         handledSignals.add(signal.id);
+
+        // Speicher begrenzen 🔥
+        if (handledSignals.size > 500) handledSignals.clear();
+
         await handleSignal(signal);
       }
     )
@@ -250,7 +281,7 @@ async function handleAnswer(signal) {
 }
 
 // =============================
-// ICE
+// ICE (STABIL 🔥)
 // =============================
 
 async function handleCandidate(signal) {
@@ -262,7 +293,13 @@ async function handleCandidate(signal) {
 
   try {
     await pc.addIceCandidate(signal.payload.candidate);
-  } catch {}
+  } catch {
+    safeTimeout(async () => {
+      try {
+        await pc.addIceCandidate(signal.payload.candidate);
+      } catch {}
+    }, 300);
+  }
 }
 
 // =============================
@@ -292,7 +329,9 @@ async function loadScreens() {
     };
 
     if (s.owner !== state.currentParticipantName) {
-      announceViewer(s.owner, s.slot_index);
+      safeTimeout(() => {
+        announceViewer(s.owner, s.slot_index);
+      }, 300);
     }
   });
 
@@ -324,7 +363,7 @@ function renderScreens() {
       video.srcObject = slot.stream;
       video.autoplay = true;
       video.playsInline = true;
-      video.muted = false;
+      video.muted = true; // 🔥 FIX
       video.style.width = "100%";
       video.style.height = "100%";
 
@@ -351,10 +390,27 @@ document.addEventListener("DOMContentLoaded", () => {
     if (localScreens[slot]) {
       localScreens[slot].stream.getTracks().forEach(t => t.stop());
       delete localScreens[slot];
+
+      await client.from("screen_share")
+        .delete()
+        .eq("room_code", state.currentRoom)
+        .eq("owner", state.currentParticipantName)
+        .eq("slot_index", slot);
+
     } else {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
 
       localScreens[slot] = { stream };
+
+      stream.getTracks()[0].onended = async () => {
+        delete localScreens[slot];
+
+        await client.from("screen_share")
+          .delete()
+          .eq("room_code", state.currentRoom)
+          .eq("owner", state.currentParticipantName)
+          .eq("slot_index", slot);
+      };
 
       await client.from("screen_share").insert([{
         room_code: state.currentRoom,
