@@ -2215,6 +2215,35 @@ localEntry.stream.getTracks().forEach(track => {
 function createViewerPeerConnection(ownerName, slotIndex) {
   const pc = new RTCPeerConnection(RTC_CONFIG);
   const key = createPeerConnectionKey(ownerName, slotIndex);
+  pc.ontrack = (event) => {
+  console.log("🎥 STREAM EMPFANGEN");
+
+  const stream = event.streams[0];
+  if (!stream) return;
+
+  const video = document.createElement("video");
+
+  video.srcObject = stream;
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+
+  video.style.width = "100%";
+  video.style.height = "100%";
+  video.style.objectFit = "contain";
+  video.style.borderRadius = "12px";
+
+  const container = document.getElementById("primaryScreenBody");
+
+  if (container) {
+    container.innerHTML = "";
+    container.appendChild(video);
+  }
+
+  setTimeout(() => {
+    video.play().catch(() => {});
+  }, 100);
+};
 
   pc.ontrack = (event) => {
     const stream = event.streams && event.streams[0] ? event.streams[0] : null;
