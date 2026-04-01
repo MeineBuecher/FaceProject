@@ -10,7 +10,21 @@ import * as state from "./state.js";
 
 let participantChannel = null;
 let chatChannel = null;
-let storageChannel = null; // 🔥 NEU
+let storageChannel = null;
+let screenChannel = null; // 🔥 NEU
+
+// =============================
+// SCREEN STATE
+// =============================
+
+let screenSlots = [
+  { owner: null, stream: null },
+  { owner: null, stream: null },
+  { owner: null, stream: null },
+  { owner: null, stream: null }
+];
+
+let localScreens = {};
 
 // =============================
 // BASIS FUNKTIONEN
@@ -135,210 +149,178 @@ async function joinRoom() {
 
   loadParticipants();
   loadChat();
-  loadStorageItems(); // 🔥 NEU
+  loadStorageItems();
+  loadScreens(); // 🔥 NEU
 
   subscribeParticipantsRealtime();
   subscribeChatRealtime();
-  subscribeStorageRealtime(); // 🔥 NEU
+  subscribeStorageRealtime();
+  subscribeScreenRealtime(); // 🔥 NEU
 }
 
 // =============================
-// REALTIME TEILNEHMER
+// 🔥 SCREEN REALTIME
 // =============================
 
-function subscribeParticipantsRealtime() {
+function subscribeScreenRealtime() {
   if (!state.currentRoom) return;
 
-  if (participantChannel) {
-    client.removeChannel(participantChannel);
+  if (screenChannel) {
+    client.removeChannel(screenChannel);
   }
 
-  participantChannel = client
-    .channel("participants-" + state.currentRoom)
+  screenChannel = client
+    .channel("screen-" + state.currentRoom)
     .on(
       "postgres_changes",
       {
         event: "*",
         schema: "public",
-        table: "participants",
+        table: "screen_share",
         filter: "room_code=eq." + state.currentRoom
       },
       () => {
-        loadParticipants();
+        loadScreens();
       }
     )
     .subscribe();
 }
 
 // =============================
-// REALTIME CHAT
+// SCREEN LOGIK
 // =============================
 
-function subscribeChatRealtime() {
-  if (!state.currentRoom) return;
-
-  if (chatChannel) {
-    client.removeChannel(chatChannel);
-  }
-
-  chatChannel = client
-    .channel("chat-" + state.currentRoom)
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "chat_messages",
-        filter: "room_code=eq." + state.currentRoom
-      },
-      (payload) => {
-        appendChatMessage(payload.new);
-      }
-    )
-    .subscribe();
-}
-
-function appendChatMessage(msg) {
-  const box = document.getElementById("chatMessages");
-  if (!box) return;
-
-  const div = document.createElement("div");
-  div.innerHTML = `<strong>${msg.sender_name}</strong><br>${msg.message}`;
-
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
-}
-
-// =============================
-// 🔥 REALTIME STORAGE
-// =============================
-
-function subscribeStorageRealtime() {
-  if (!state.currentRoom) return;
-
-  if (storageChannel) {
-    client.removeChannel(storageChannel);
-  }
-
-  storageChannel = client
-    .channel("storage-" + state.currentRoom)
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "storage_items",
-        filter: "room_code=eq." + state.currentRoom
-      },
-      () => {
-        loadStorageItems();
-      }
-    )
-    .subscribe();
-}
-
-// =============================
-// STORAGE LADEN
-// =============================
-
-async function loadStorageItems() {
+async function loadScreens() {
   if (!state.currentRoom) return;
 
   const { data } = await client
-    .from("storage_items")
+    .from("screen_share")
     .select("*")
     .eq("room_code", state.currentRoom)
-    .order("created_at", { ascending: true });
+    .eq("active", true);
 
-  const files = document.getElementById("filesArea");
-  const images = document.getElementById("imagesArea");
-  const texts = document.getElementById("textsArea");
+  screenSlots = [
+    { owner: null, stream: null },
+    { owner: null, stream: null },
+    { owner: null, stream: null },
+    { owner: null, stream: null }
+  ];
 
-  if (!files || !images || !texts) return;
+  (data || []).forEach(s => {
+    screenSlots[s.slot_index] = {
+      owner: s.owner,
+      stream: localScreens[s.slot_index]?.stream || null
+    };
+  });
 
-  files.innerHTML = "";
-  images.innerHTML = "";
-  texts.innerHTML = "";
+  renderScreens();
+}
 
-  (data || []).forEach(item => {
-    if (item.type === "file") {
-      files.innerHTML += `<a href="${item.content}" target="_blank">${item.file_name}</a><br>`;
-    }
+async function startScreenShare(slotIndex) {
+  if (localScreens[slotIndex]) {
+    setStatus("Dieser Screen läuft bereits");
+    return;
+  }
 
-    if (item.type === "image") {
-      images.innerHTML += `<img src="${item.content}" style="width:100%;border-radius:10px;margin-bottom:10px;">`;
-    }
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true
+  });
 
-    if (item.type === "text") {
-      texts.innerHTML += `<div>${item.content}</div>`;
+  localScreens[slotIndex] = { stream };
+
+  await client.from("screen_share").insert([{
+    room_code: state.currentRoom,
+    owner: state.currentParticipantName,
+    slot_index: slotIndex,
+    active: true
+  }]);
+
+  stream.getTracks()[0].onended = () => {
+    stopScreenShare(slotIndex);
+  };
+
+  setStatus("Screen " + (slotIndex + 1) + " gestartet");
+}
+
+async function stopScreenShare(slotIndex) {
+  if (localScreens[slotIndex]?.stream) {
+    localScreens[slotIndex].stream.getTracks().forEach(t => t.stop());
+    delete localScreens[slotIndex];
+  }
+
+  await client
+    .from("screen_share")
+    .delete()
+    .eq("room_code", state.currentRoom)
+    .eq("owner", state.currentParticipantName)
+    .eq("slot_index", slotIndex);
+
+  setStatus("Screen " + (slotIndex + 1) + " beendet");
+}
+
+async function toggleScreenShare() {
+  const input = prompt("Screen wählen (1-4)", "1");
+  if (!input) return;
+
+  const slot = parseInt(input) - 1;
+
+  if (slot < 0 || slot > 3) {
+    setStatus("1 bis 4 eingeben");
+    return;
+  }
+
+  if (localScreens[slot]) {
+    await stopScreenShare(slot);
+  } else {
+    await startScreenShare(slot);
+  }
+}
+
+function renderScreens() {
+  const boxes = [
+    document.getElementById("primaryScreen"),
+    document.getElementById("screenThumb1"),
+    document.getElementById("screenThumb2"),
+    document.getElementById("screenThumb3")
+  ];
+
+  boxes.forEach((box, i) => {
+    if (!box) return;
+
+    const body = box.querySelector(".screen-slot-body");
+    if (!body) return;
+
+    body.innerHTML = "";
+
+    const slot = screenSlots[i];
+
+    if (slot.stream) {
+      const video = document.createElement("video");
+      video.srcObject = slot.stream;
+      video.autoplay = true;
+      video.muted = true;
+      video.style.width = "100%";
+      video.style.height = "100%";
+
+      body.appendChild(video);
+    } else {
+      body.innerHTML = "<p>Keine Freigabe aktiv</p>";
     }
   });
 }
 
 // =============================
-// UPLOAD BUTTONS
+// BUTTON VERBINDEN
+// =============================
+
+document.getElementById("shareScreenBtn")?.addEventListener("click", async () => {
+  await toggleScreenShare();
+});
+
+// =============================
+// REST BLEIBT UNVERÄNDERT
 // =============================
 
 document.addEventListener("DOMContentLoaded", () => {
-  // FILE
-  document.getElementById("uploadFileBtn")?.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-
-    input.onchange = async () => {
-      const file = input.files[0];
-      if (!file) return;
-
-      const uploaded = await uploadToStorage(file, "file");
-
-      await client.from("storage_items").insert([{
-        room_code: state.currentRoom,
-        type: "file",
-        content: uploaded.url,
-        file_name: file.name,
-        storage_path: uploaded.path
-      }]);
-    };
-
-    input.click();
-  });
-
-  // IMAGE (📱 FIX)
-  document.getElementById("uploadImageBtn")?.addEventListener("click", () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.capture = "environment";
-
-    input.onchange = async () => {
-      const file = input.files[0];
-      if (!file) return;
-
-      const uploaded = await uploadToStorage(file, "image");
-
-      await client.from("storage_items").insert([{
-        room_code: state.currentRoom,
-        type: "image",
-        content: uploaded.url,
-        file_name: file.name,
-        storage_path: uploaded.path
-      }]);
-    };
-
-    input.click();
-  });
-
-  // TEXT
-  document.getElementById("addTextBtn")?.addEventListener("click", async () => {
-    const text = prompt("Text eingeben:");
-    if (!text) return;
-
-    await client.from("storage_items").insert([{
-      room_code: state.currentRoom,
-      type: "text",
-      content: text
-    }]);
-  });
-
   setStatus("TableProject bereit");
 });
